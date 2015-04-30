@@ -756,7 +756,6 @@ public class WireCompiler {
     try {
       writer = io.getJavaWriter(artifact);
       writer.emitSingleLineComment(CODE_GENERATED_BY_WIRE);
-      writer.emitSingleLineComment("Source file: %s", sourceFileName);
       writer.emitPackage(getJavaPackage());
 
       List<Type> types = new ArrayList<Type>();
