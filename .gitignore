@@ -16,3 +16,4 @@ release.properties
 dependency-reduced-pom.xml
 
 out/
+wire-compiler/WireCompilerTest/
