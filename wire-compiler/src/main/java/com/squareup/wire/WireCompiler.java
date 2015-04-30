@@ -125,9 +125,6 @@ public final class WireCompiler {
       ClassName javaTypeName, TypeSpec typeSpec, Location location) throws WireException {
     JavaFile.Builder builder = JavaFile.builder(javaTypeName.packageName(), typeSpec)
         .addFileComment("$L", CODE_GENERATED_BY_WIRE);
-    if (location != null) {
-      builder.addFileComment("\nSource file: $L", location);
-    }
     JavaFile javaFile = builder.build();
 
     log.artifact(options.javaOut, javaFile);
