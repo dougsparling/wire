@@ -1,5 +1,21 @@
+/*
+ * Copyright 2013 Square Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.squareup.wire;
 
+import com.squareup.wire.java.ServiceFactory;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
@@ -17,29 +33,29 @@ final class CommandLineOptions {
   public static final String REGISTRY_CLASS_FLAG = "--registry_class=";
   public static final String NO_OPTIONS_FLAG = "--no_options";
   public static final String ENUM_OPTIONS_FLAG = "--enum_options=";
-  public static final String SERVICE_WRITER_FLAG = "--service_writer=";
-  public static final String SERVICE_WRITER_OPT_FLAG = "--service_writer_opt=";
+  public static final String SERVICE_FACTORY_FLAG = "--service_factory=";
+  public static final String SERVICE_FACTORY_OPT_FLAG = "--service_factory_opt=";
   public static final String QUIET_FLAG = "--quiet";
   public static final String DRY_RUN_FLAG = "--dry_run";
 
   final String protoPath;
-  final String javaOut;
+  final File javaOut;
   final List<String> sourceFileNames;
   final List<String> roots;
   final String registryClass;
   final boolean emitOptions;
   final Set<String> enumOptions;
-  final String serviceWriter;
-  final List<String> serviceWriterOptions;
+  final ServiceFactory serviceFactory;
+  final List<String> serviceFactoryOptions;
   final boolean quiet;
   final boolean dryRun;
 
-  CommandLineOptions(String protoPath, String javaOut,
+  CommandLineOptions(String protoPath, File javaOut,
       List<String> sourceFileNames, List<String> roots,
       String registryClass, boolean emitOptions,
       Set<String> enumOptions,
-      String serviceWriter,
-      List<String> serviceWriterOptions,
+      ServiceFactory serviceFactory,
+      List<String> serviceFactoryOptions,
       boolean quiet,
       boolean dryRun) {
     this.protoPath = protoPath;
@@ -49,8 +65,8 @@ final class CommandLineOptions {
     this.registryClass = registryClass;
     this.emitOptions = emitOptions;
     this.enumOptions = enumOptions;
-    this.serviceWriter = serviceWriter;
-    this.serviceWriterOptions = serviceWriterOptions;
+    this.serviceFactory = serviceFactory;
+    this.serviceFactoryOptions = serviceFactoryOptions;
     this.quiet = quiet;
     this.dryRun = dryRun;
   }
@@ -63,8 +79,8 @@ final class CommandLineOptions {
    *     [--files=&lt;protos.include&gt;] [--roots=&lt;message_name&gt;[,&lt;message_name&gt;...]]
    *     [--registry_class=&lt;class_name&gt;] [--no_options]
    *     [--enum_options=&lt;option_name&gt;[,&lt;option_name&gt;...]]
-   *     [--service_writer=&lt;class_name&gt;]
-   *     [--service_writer_opt=&lt;value&gt;] [--service_writer_opt=&lt;value&gt;]...]
+   *     [--service_factory=&lt;class_name&gt;]
+   *     [--service_factory_opt=&lt;value&gt;] [--service_factory_opt=&lt;value&gt;]...]
    *     [--quiet] [--dry_run]
    *     [file [file...]]
    * </pre>
@@ -101,15 +117,15 @@ final class CommandLineOptions {
   CommandLineOptions(String... args) throws WireException {
     int index = 0;
 
-    List<String> sourceFileNames = new ArrayList<String>();
-    List<String> serviceWriterOptions = new ArrayList<String>();
-    List<String> roots = new ArrayList<String>();
+    List<String> sourceFileNames = new ArrayList<>();
+    List<String> serviceFactoryOptions = new ArrayList<>();
+    List<String> roots = new ArrayList<>();
     boolean emitOptions = true;
     String protoPath = null;
-    String javaOut = null;
+    File javaOut = null;
     String registryClass = null;
-    List<String> enumOptionsList = new ArrayList<String>();
-    String serviceWriter = null;
+    List<String> enumOptionsList = new ArrayList<>();
+    ServiceFactory serviceFactory = null;
     boolean quiet = false;
     boolean dryRun = false;
 
@@ -117,7 +133,7 @@ final class CommandLineOptions {
       if (args[index].startsWith(PROTO_PATH_FLAG)) {
         protoPath = args[index].substring(PROTO_PATH_FLAG.length());
       } else if (args[index].startsWith(JAVA_OUT_FLAG)) {
-        javaOut = args[index].substring(JAVA_OUT_FLAG.length());
+        javaOut = new File(args[index].substring(JAVA_OUT_FLAG.length()));
       } else if (args[index].startsWith(FILES_FLAG)) {
         File files = new File(args[index].substring(FILES_FLAG.length()));
         String[] fileNames;
@@ -135,10 +151,11 @@ final class CommandLineOptions {
         emitOptions = false;
       } else if (args[index].startsWith(ENUM_OPTIONS_FLAG)) {
         enumOptionsList.addAll(splitArg(args[index], ENUM_OPTIONS_FLAG.length()));
-      } else if (args[index].startsWith(SERVICE_WRITER_FLAG)) {
-        serviceWriter = args[index].substring(SERVICE_WRITER_FLAG.length());
-      } else if (args[index].startsWith(SERVICE_WRITER_OPT_FLAG)) {
-        serviceWriterOptions.add(args[index].substring(SERVICE_WRITER_OPT_FLAG.length()));
+      } else if (args[index].startsWith(SERVICE_FACTORY_FLAG)) {
+        String serviceFactoryClassName = args[index].substring(SERVICE_FACTORY_FLAG.length());
+        serviceFactory = loadServiceFactory(serviceFactoryClassName);
+      } else if (args[index].startsWith(SERVICE_FACTORY_OPT_FLAG)) {
+        serviceFactoryOptions.add(args[index].substring(SERVICE_FACTORY_OPT_FLAG.length()));
       } else if (args[index].startsWith(QUIET_FLAG)) {
         quiet = true;
       } else if (args[index].startsWith(DRY_RUN_FLAG)) {
@@ -155,14 +172,43 @@ final class CommandLineOptions {
     this.roots = roots;
     this.registryClass = registryClass;
     this.emitOptions = emitOptions;
-    this.enumOptions = new LinkedHashSet<String>(enumOptionsList);
-    this.serviceWriter = serviceWriter;
-    this.serviceWriterOptions = serviceWriterOptions;
+    this.enumOptions = new LinkedHashSet<>(enumOptionsList);
+    this.serviceFactory = serviceFactory;
+    this.serviceFactoryOptions = serviceFactoryOptions;
     this.quiet = quiet;
     this.dryRun = dryRun;
   }
 
+  private ServiceFactory loadServiceFactory(String className) throws WireException {
+    try {
+      Class<?> serviceFactoryClass = Class.forName(className);
+      return (ServiceFactory) serviceFactoryClass.newInstance();
+    } catch (ClassNotFoundException e) {
+      throw new WireException(
+          "Failed to load ServiceFactory: " + className, e);
+    } catch (ClassCastException e) {
+      throw new WireException(
+          "Class " + className + " does not implement ServiceFactory interface.");
+    } catch (InstantiationException e) {
+      throw new WireException(
+          "Failed to instantiate ServiceFactory: " + className, e);
+    } catch (IllegalAccessException e) {
+      throw new WireException(
+          "Failed to access ServiceFactory: " + className, e);
+    }
+  }
+
   private static List<String> splitArg(String arg, int flagLength) {
     return Arrays.asList(arg.substring(flagLength).split(","));
+  }
+
+  public String protoPath() {
+    String result = protoPath;
+    if (result == null) {
+      result = System.getProperty("user.dir");
+      System.err.println(CommandLineOptions.PROTO_PATH_FLAG + " flag not specified, "
+          + "using current dir " + result);
+    }
+    return result;
   }
 }

@@ -16,6 +16,8 @@
 package com.squareup.wire;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -29,25 +31,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.RandomAccess;
 import java.util.Set;
+import okio.Buffer;
+import okio.BufferedSink;
+import okio.BufferedSource;
 import okio.ByteString;
+import okio.Okio;
 
 import static com.squareup.wire.ExtendableMessage.ExtendableBuilder;
 import static com.squareup.wire.Message.Builder;
 import static com.squareup.wire.Message.Datatype;
 import static com.squareup.wire.Message.Label;
+import static com.squareup.wire.Preconditions.checkNotNull;
 
-/**
- * An adapter than can perform I/O on a given Message type.
- *
- * @param <M> the Message class handled by this adapter.
- */
-final class MessageAdapter<M extends Message> {
+public final class MessageAdapter<M extends Message> {
   // Unicode character "Full Block" (U+2588)
   private static final String FULL_BLOCK = "█";
   // The string to use when redacting fields from toString.
   private static final String REDACTED = FULL_BLOCK + FULL_BLOCK;
 
-  public static final class FieldInfo {
+  static final class FieldInfo {
     final int tag;
     final String name;
     final Datatype datatype;
@@ -120,7 +122,7 @@ final class MessageAdapter<M extends Message> {
     }
   }
 
-  public void setBuilderField(Builder<M> builder, FieldInfo fieldInfo, Object value) {
+  void setBuilderField(Builder<M> builder, FieldInfo fieldInfo, Object value) {
     try {
       fieldInfo.builderField.set(builder, value);
     } catch (IllegalAccessException e) {
@@ -128,7 +130,7 @@ final class MessageAdapter<M extends Message> {
     }
   }
 
-  public void setBuilderMethod(Builder<M> builder, FieldInfo fieldInfo, Object value) {
+  void setBuilderMethod(Builder<M> builder, FieldInfo fieldInfo, Object value) {
     try {
       fieldInfo.builderMethod.invoke(builder, value);
     } catch (IllegalAccessException e) {
@@ -261,9 +263,9 @@ final class MessageAdapter<M extends Message> {
     return size;
   }
 
-  private <T extends ExtendableMessage<?>> int getExtensionsSerializedSize(ExtensionMap<T> map) {
+  private <T extends ExtendableMessage<T>> int getExtensionsSerializedSize(ExtensionMap<T> map) {
     int size = 0;
-    for (int i = 0; i < map.size(); i++) {
+    for (int i = 0, count = map.size(); i < count; i++) {
       Extension<T, ?> extension = map.getExtension(i);
       Object value = map.getExtensionValue(i);
       int tag = extension.getTag();
@@ -284,16 +286,16 @@ final class MessageAdapter<M extends Message> {
 
   private int getRepeatedSize(List<?> value, int tag, Datatype datatype) {
     int size = 0;
-    for (Object o : value) {
-      size += getSerializedSize(tag, o, datatype);
+    for (int i = 0, count = value.size(); i < count; i++) {
+      size += getSerializedSize(tag, value.get(i), datatype);
     }
     return size;
   }
 
   private int getPackedSize(List<?> value, int tag, Datatype datatype) {
     int packedLength = 0;
-    for (Object o : value) {
-      packedLength += getSerializedSizeNoTag(o, datatype);
+    for (int i = 0, count = value.size(); i < count; i++) {
+      packedLength += getSerializedSizeNoTag(value.get(i), datatype);
     }
     // tag + length + value + value + ...
     int size = WireOutput.varint32Size(WireOutput.makeTag(tag, WireType.LENGTH_DELIMITED));
@@ -302,8 +304,35 @@ final class MessageAdapter<M extends Message> {
     return size;
   }
 
-  /** Uses reflection to write {@code message} to {@code output} in serialized form. */
-  void write(M message, WireOutput output) throws IOException {
+  /** Encode {@code value} as a {@code byte[]}. */
+  public byte[] writeBytes(M value) {
+    checkNotNull(value, "value == null");
+    Buffer buffer = new Buffer();
+    try {
+      write(value, buffer);
+    } catch (IOException e) {
+      throw new AssertionError(e); // No I/O writing to Buffer.
+    }
+    return buffer.readByteArray();
+  }
+
+  /** Encode {@code value} and write it to {@code stream}. */
+  public void writeStream(M value, OutputStream stream) throws IOException {
+    checkNotNull(value, "value == null");
+    checkNotNull(stream, "stream == null");
+    BufferedSink buffer = Okio.buffer(Okio.sink(stream));
+    write(value, buffer);
+    buffer.emit();
+  }
+
+  /** Encode {@code value} and write it to {@code stream}. */
+  public void write(M value, BufferedSink sink) throws IOException {
+    checkNotNull(value, "value == null");
+    checkNotNull(sink, "sink == null");
+    write(value, new WireOutput(sink));
+  }
+
+  private void write(M message, WireOutput output) throws IOException {
     for (FieldInfo fieldInfo : getFields()) {
       Object value = getFieldValue(message, fieldInfo);
       if (value == null) {
@@ -333,9 +362,9 @@ final class MessageAdapter<M extends Message> {
     message.writeUnknownFieldMap(output);
   }
 
-  private <T extends ExtendableMessage<?>> void writeExtensions(WireOutput output,
+  private <T extends ExtendableMessage<T>> void writeExtensions(WireOutput output,
       ExtensionMap<T> extensionMap) throws IOException {
-    for (int i = 0; i < extensionMap.size(); i++) {
+    for (int i = 0, count = extensionMap.size(); i < count; i++) {
       Extension<T, ?> extension = extensionMap.getExtension(i);
       Object value = extensionMap.getExtensionValue(i);
       int tag = extension.getTag();
@@ -355,35 +384,22 @@ final class MessageAdapter<M extends Message> {
 
   private void writeRepeated(WireOutput output, List<?> value, int tag, Datatype datatype)
       throws IOException {
-    for (Object o : value) {
-      writeValue(output, tag, o, datatype);
+    for (int i = 0, count = value.size(); i < count; i++) {
+      writeValue(output, tag, value.get(i), datatype);
     }
   }
 
   private void writePacked(WireOutput output, List<?> value, int tag, Datatype datatype)
       throws IOException {
     int packedLength = 0;
-    for (Object o : value) {
-      packedLength += getSerializedSizeNoTag(o, datatype);
+    for (int i = 0, count = value.size(); i < count; i++) {
+      packedLength += getSerializedSizeNoTag(value.get(i), datatype);
     }
     output.writeTag(tag, WireType.LENGTH_DELIMITED);
     output.writeVarint32(packedLength);
-    for (Object o : value) {
-      writeValueNoTag(output, o, datatype);
+    for (int i = 0, count = value.size(); i < count; i++) {
+      writeValueNoTag(output, value.get(i), datatype);
     }
-  }
-
-  /**
-   * Serializes a given {@link Message} and returns the results as a byte array.
-   */
-  byte[] toByteArray(M message) {
-    byte[] result = new byte[getSerializedSize(message)];
-    try {
-      write(message, WireOutput.newInstance(result));
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-    return result;
   }
 
   /**
@@ -472,14 +488,17 @@ final class MessageAdapter<M extends Message> {
 
   @SuppressWarnings("unchecked")
   private <E extends ProtoEnum> int getEnumSize(E value) {
-    EnumAdapter<E> adapter = (EnumAdapter<E>) wire.enumAdapter(value.getClass());
-    return WireOutput.varint32Size(adapter.toInt(value));
+    return WireOutput.varint32Size(value.getValue());
   }
 
   @SuppressWarnings("unchecked")
   private <MM extends Message> int getMessageSize(MM message) {
-    int messageSize = message.getSerializedSize();
-    return WireOutput.varint32Size(messageSize) + messageSize;
+    int size = message.cachedSerializedSize;
+    if (size == -1) {
+      MessageAdapter<MM> adapter = wire.messageAdapter((Class<MM>) message.getClass());
+      size = message.cachedSerializedSize = adapter.getSerializedSize(message);
+    }
+    return WireOutput.varint32Size(size) + size;
   }
 
   private void writeValue(WireOutput output, int tag, Object value, Datatype datatype)
@@ -502,14 +521,14 @@ final class MessageAdapter<M extends Message> {
       case BOOL: output.writeRawByte((Boolean) value ? 1 : 0); break;
       case ENUM: writeEnum((ProtoEnum) value, output); break;
       case STRING:
-        final byte[] bytes = ((String) value).getBytes("UTF-8");
-        output.writeVarint32(bytes.length);
+        ByteString bytes = ByteString.encodeUtf8((String) value);
+        output.writeVarint32(bytes.size());
         output.writeRawBytes(bytes);
         break;
       case BYTES:
         ByteString byteString = (ByteString) value;
         output.writeVarint32(byteString.size());
-        output.writeRawBytes(byteString.toByteArray());
+        output.writeRawBytes(byteString);
         break;
       case MESSAGE: writeMessage((Message) value, output); break;
       case FIXED32: case SFIXED32: output.writeFixed32((Integer) value); break;
@@ -522,19 +541,40 @@ final class MessageAdapter<M extends Message> {
 
   @SuppressWarnings("unchecked")
   private <MM extends Message> void writeMessage(MM message, WireOutput output) throws IOException {
-    output.writeVarint32(message.getSerializedSize());
     MessageAdapter<MM> adapter = wire.messageAdapter((Class<MM>) message.getClass());
+    int size = message.cachedSerializedSize;
+    if (size == -1) {
+      size = message.cachedSerializedSize = adapter.getSerializedSize(message);
+    }
+    output.writeVarint32(size);
     adapter.write(message, output);
   }
 
   @SuppressWarnings("unchecked")
   private <E extends ProtoEnum> void writeEnum(E value, WireOutput output)
       throws IOException {
-    EnumAdapter<E> adapter = (EnumAdapter<E>) wire.enumAdapter(value.getClass());
-    output.writeVarint32(adapter.toInt(value));
+    output.writeVarint32(value.getValue());
   }
 
   // Reading
+
+  /** Read an encoded message from {@code source}. */
+  public M read(BufferedSource source) throws IOException {
+    checkNotNull(source, "source == null");
+    return read(new WireInput(source));
+  }
+
+  /** Read an encoded message from {@code bytes}. */
+  public M readBytes(byte[] bytes) throws IOException {
+    checkNotNull(bytes, "bytes == null");
+    return read(new Buffer().write(bytes));
+  }
+
+  /** Read an encoded message from {@code stream}. */
+  public M readStream(InputStream stream) throws IOException {
+    checkNotNull(stream, "stream == null");
+    return read(Okio.buffer(Okio.source(stream)));
+  }
 
   /** Uses reflection to read an instance from {@code input}. */
   M read(WireInput input) throws IOException {
@@ -556,7 +596,7 @@ final class MessageAdapter<M extends Message> {
             if (fieldInfo != null) {
               setBuilderField(builder, fieldInfo, value);
             } else {
-              setExtension((ExtendableBuilder<?>) builder, getExtension(storedTag), value);
+              setExtension((ExtendableBuilder<?, ?>) builder, getExtension(storedTag), value);
             }
           }
           return builder.build();
@@ -605,9 +645,9 @@ final class MessageAdapter<M extends Message> {
             builder.addVarint(tag, (Integer) value);
           } else {
             if (label.isRepeated()) {
-              storage.add(tag, value);
+              storage.add(tag, value != null ? value : Collections.emptyList());
             } else if (extension != null) {
-              setExtension((ExtendableBuilder<?>) builder, extension, value);
+              setExtension((ExtendableBuilder<?, ?>) builder, extension, value);
             } else if (label.isOneOf()) {
               // In order to maintain the 'oneof' invariant, call the builder setter method rather
               // than setting the builder field directly.
@@ -697,7 +737,7 @@ final class MessageAdapter<M extends Message> {
     Class<Message> messageClass = fieldInfo == null
         ? null : (Class<Message>) fieldInfo.messageType;
     if (messageClass == null) {
-      Extension<ExtendableMessage<?>, ?> extension = getExtension(tag);
+      Extension<?, ?> extension = getExtension(tag);
       if (extension != null) {
         messageClass = (Class<Message>) extension.getMessageType();
       }
@@ -718,8 +758,7 @@ final class MessageAdapter<M extends Message> {
         builder.ensureUnknownFieldMap().addFixed64(tag, input.readFixed64());
         break;
       case LENGTH_DELIMITED:
-        int length = input.readVarint32();
-        builder.ensureUnknownFieldMap().addLengthDelimited(tag, input.readBytes(length));
+        builder.ensureUnknownFieldMap().addLengthDelimited(tag, input.readBytes());
         break;
       /* Skip any groups found in the input */
       case START_GROUP:
@@ -757,17 +796,17 @@ final class MessageAdapter<M extends Message> {
   }
 
   @SuppressWarnings("unchecked")
-  private Extension<ExtendableMessage<?>, ?> getExtension(int tag) {
+  private Extension<?, ?> getExtension(int tag) {
     ExtensionRegistry registry = wire.registry;
     return registry == null
-        ? null : registry.getExtension((Class<ExtendableMessage<?>>) messageType, tag);
+        ? null : registry.getExtension((Class<ExtendableMessage>) messageType, tag);
   }
 
   @SuppressWarnings("unchecked")
-  Extension<ExtendableMessage<?>, ?> getExtension(String name) {
+  Extension<?, ?> getExtension(String name) {
     ExtensionRegistry registry = wire.registry;
     return registry == null
-        ? null : registry.getExtension((Class<ExtendableMessage<?>>) messageType, name);
+        ? null : registry.getExtension((Class<ExtendableMessage>) messageType, name);
   }
 
   @SuppressWarnings("unchecked")
@@ -780,7 +819,7 @@ final class MessageAdapter<M extends Message> {
     FieldInfo fieldInfo = fieldInfoMap.get(tag);
     Class<? extends ProtoEnum> enumType = fieldInfo == null ? null : fieldInfo.enumType;
     if (enumType == null) {
-      Extension<ExtendableMessage<?>, ?> extension = getExtension(tag);
+      Extension<?, ?> extension = getExtension(tag);
       if (extension != null) {
         enumType = extension.getEnumType();
       }

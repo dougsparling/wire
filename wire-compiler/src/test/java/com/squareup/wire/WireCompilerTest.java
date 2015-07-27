@@ -15,23 +15,23 @@
  */
 package com.squareup.wire;
 
-import com.squareup.javawriter.JavaWriter;
-import com.squareup.protoparser.ServiceElement;
+import com.squareup.javapoet.TypeSpec;
+import com.squareup.wire.java.JavaGenerator;
+import com.squareup.wire.java.SimpleServiceFactory;
+import com.squareup.wire.schema.Loader;
+import com.squareup.wire.schema.Service;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Scanner;
-import java.util.Set;
+import okio.Okio;
+import okio.Source;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class WireCompilerTest {
   private StringWireLogger logger;
@@ -47,7 +47,7 @@ public class WireCompilerTest {
     dir.mkdir();
     cleanup(dir);
     List<String> filesBefore = getAllFiles(dir);
-    assertEquals(0, filesBefore.size());
+    assertThat(filesBefore).hasSize(0);
     return dir;
   }
 
@@ -66,31 +66,27 @@ public class WireCompilerTest {
     testProto(sources, outputs, null);
   }
 
-  private void testProto(String[] sources, String[] outputs, String serviceWriter,
-      String... serviceWriterOption) throws Exception {
-    int numFlags = 3;
-    if (serviceWriter != null) ++numFlags;
-    if (serviceWriterOption != null) numFlags += serviceWriterOption.length;
-    String[] args = new String[numFlags + sources.length];
-    args[0] = "--proto_path=../wire-runtime/src/test/proto";
-    args[1] = "--java_out=" + testDir.getAbsolutePath();
-    args[2] = "--enum_options=squareup.protos.custom_options.enum_value_option,"
+  private void testProto(String[] sources, String[] outputs,
+      String serviceFactory, String... options) throws Exception {
+    List<String> args = new ArrayList<String>();
+    args.add("--proto_path=../wire-runtime/src/test/proto");
+    args.add("--java_out=" + testDir.getAbsolutePath());
+    args.add("--enum_options=squareup.protos.custom_options.enum_value_option,"
         + "squareup.protos.custom_options.complex_enum_value_option,"
-        + "squareup.protos.foreign.foreign_enum_value_option";
-    if (serviceWriter != null) {
-      args[3] = "--service_writer=" + serviceWriter;
-      if (serviceWriterOption != null) {
-        for (int i = 0; i < serviceWriterOption.length; i++) {
-          args[4 + i] = "--service_writer_opt=" + serviceWriterOption[i];
-        }
-      }
+        + "squareup.protos.foreign.foreign_enum_value_option");
+    if (serviceFactory != null) {
+      args.add("--service_factory=" + serviceFactory);
     }
-    System.arraycopy(sources, 0, args, numFlags, sources.length);
-
-    invokeCompiler(args);
+    for (String option : options) {
+      args.add("--service_factory_opt=" + option);
+    }
+    args.addAll(Arrays.asList(sources));
+    invokeCompiler(args.toArray(new String[args.size()]));
 
     List<String> filesAfter = getAllFiles(testDir);
-    assertEquals(filesAfter.toString(), outputs.length, filesAfter.size());
+    assertThat(filesAfter.size())
+        .overridingErrorMessage(filesAfter.toString())
+        .isEqualTo(outputs.length);
 
     for (String output : outputs) {
       assertFilesMatch(testDir, output);
@@ -110,7 +106,7 @@ public class WireCompilerTest {
     invokeCompiler(args);
 
     List<String> filesAfter = getAllFiles(testDir);
-    assertEquals(outputs.length, filesAfter.size());
+    assertThat(filesAfter).hasSize(outputs.length);
 
     for (String output : outputs) {
       assertFilesMatchNoOptions(testDir, output);
@@ -129,7 +125,7 @@ public class WireCompilerTest {
     invokeCompiler(args);
 
     List<String> filesAfter = getAllFiles(testDir);
-    assertEquals(outputs.length, filesAfter.size());
+    assertThat(filesAfter).hasSize(outputs.length);
 
     for (String output : outputs) {
       assertFilesMatch(testDir, output);
@@ -142,15 +138,14 @@ public class WireCompilerTest {
     this.testProtoWithRoots(sources, roots, outputs, extraArgs);
   }
 
-  private void testProtoWithRoots(String[] sources, String roots, String[] outputs,
-      String[] extraArgs)
-      throws Exception {
+  private void testProtoWithRoots(
+      String[] sources, String roots, String[] outputs, String[] extraArgs) throws Exception {
     int numFlags = 4;
     String[] args = new String[numFlags + sources.length + extraArgs.length];
     int index = 0;
     args[index++] = "--proto_path=../wire-runtime/src/test/proto";
     args[index++] = "--java_out=" + testDir.getAbsolutePath();
-    args[index++] = "--service_writer=com.squareup.wire.SimpleServiceWriter";
+    args[index++] = "--service_factory=com.squareup.wire.java.SimpleServiceFactory";
     args[index++] = "--roots=" + roots;
     for (int i = 0; i < extraArgs.length; i++) {
       args[index++] = extraArgs[i];
@@ -160,7 +155,9 @@ public class WireCompilerTest {
     invokeCompiler(args);
 
     List<String> filesAfter = getAllFiles(testDir);
-    assertEquals("Wrong number of files written", outputs.length, filesAfter.size());
+    assertThat(filesAfter.size())
+        .overridingErrorMessage("Wrong number of files written")
+        .isEqualTo(outputs.length);
 
     for (String output : outputs) {
       assertFilesMatch(testDir, output);
@@ -173,15 +170,17 @@ public class WireCompilerTest {
     String[] args = new String[numFlags + sources.length];
     args[0] = "--proto_path=../wire-runtime/src/test/proto";
     args[1] = "--java_out=" + testDir.getAbsolutePath();
-    args[2] = "--service_writer=com.squareup.wire.TestRxJavaServiceWriter";
-    args[3] = "--service_writer_opt=" + serviceSuffix;
+    args[2] = "--service_factory=com.squareup.wire.TestRxJavaServiceFactory";
+    args[3] = "--service_factory_opt=" + serviceSuffix;
     args[4] = "--roots=" + roots;
     System.arraycopy(sources, 0, args, numFlags, sources.length);
 
     invokeCompiler(args);
 
     List<String> filesAfter = getAllFiles(testDir);
-    assertEquals(filesAfter.toString(), outputs.length, filesAfter.size());
+    assertThat(filesAfter.size())
+        .overridingErrorMessage(filesAfter.toString())
+        .isEqualTo(outputs.length);
 
     for (String output : outputs) {
       assertJavaFilesMatchWithSuffix(testDir, output, serviceSuffix);
@@ -259,7 +258,8 @@ public class WireCompilerTest {
         "com/squareup/services/anotherpackage/SendDataResponse.java",
         "com/squareup/services/ExampleService.java"
     };
-    testProto(sources, outputs, "com.squareup.wire.SimpleServiceWriter");
+    testProto(sources, outputs,
+        "com.squareup.wire.java.SimpleServiceFactory");
   }
 
   @Test public void testRetrofitService() throws Exception {
@@ -272,7 +272,8 @@ public class WireCompilerTest {
         "com/squareup/services/anotherpackage/SendDataResponse.java",
         "com/squareup/services/RetrofitService.java"
     };
-    testProto(sources, outputs, "com.squareup.wire.RetrofitServiceWriter");
+    testProto(sources, outputs,
+        "com.squareup.wire.java.RetrofitServiceFactory");
   }
 
   @Test public void testRxJavaService() throws Exception {
@@ -285,7 +286,8 @@ public class WireCompilerTest {
         "com/squareup/services/anotherpackage/SendDataResponse.java",
         "com/squareup/services/RxJavaService.java"
     };
-    testProto(sources, outputs, "com.squareup.wire.RxJavaServiceWriter");
+    testProto(sources, outputs,
+        "com.squareup.wire.java.RxJavaServiceFactory");
   }
 
   @Test
@@ -330,19 +332,13 @@ public class WireCompilerTest {
     testLimitedServiceGeneration(sources, roots, outputs, "SomeEndpoints");
   }
 
-  // Verify that the --service_writer_opt flag works correctly.
+  // Verify that the --service_factory_opt flag works correctly with --service_factory.
   @SuppressWarnings("UnusedDeclaration")
-  public static class TestServiceWriter extends SimpleServiceWriter {
-    public TestServiceWriter(JavaWriter writer, List<String> options) {
-      super(writer, options);
-      if (!Arrays.asList("OPTION1", "OPTION2").equals(options)) {
-        fail();
-      }
-    }
-
-    @Override public void emitService(ServiceElement service, Set<String> importedTypes)
-        throws IOException {
-      super.emitService(service, importedTypes);
+  public static class TestServiceFactory extends SimpleServiceFactory {
+    @Override public TypeSpec create(
+        JavaGenerator javaGenerator, List<String> options, Service service) {
+      assertThat(options).containsExactly("OPTION1", "OPTION2");
+      return super.create(javaGenerator, options, service);
     }
   }
 
@@ -356,8 +352,8 @@ public class WireCompilerTest {
         "com/squareup/services/anotherpackage/SendDataResponse.java",
         "com/squareup/services/ExampleService.java"
     };
-    testProto(sources, outputs, "com.squareup.wire.WireCompilerTest$TestServiceWriter",
-        "OPTION1", "OPTION2");
+    testProto(sources, outputs,
+        "com.squareup.wire.WireCompilerTest$TestServiceFactory", "OPTION1", "OPTION2");
   }
 
   @Test public void testRegistry() throws Exception {
@@ -660,33 +656,15 @@ public class WireCompilerTest {
         "--quiet"
     };
     testProtoWithRoots(sources, roots, outputs, extraArgs);
-    assertEquals(testDir.getAbsolutePath().toString() + "/com/squareup/wire/protos/roots/TheRequest.java\n"
-            + testDir.getAbsolutePath().toString() + "/com/squareup/wire/protos/roots/TheResponse.java\n"
-            + testDir.getAbsolutePath().toString() + "/com/squareup/wire/protos/roots/TheService.java\n",
-        logger.getLog());
-  }
-
-  @Test public void sanitizeJavadocStripsTrailingWhitespace() {
-    String input = "The quick brown fox  \nJumps over  \n\t \t\nThe lazy dog  ";
-    String expected = "The quick brown fox\nJumps over\n\nThe lazy dog";
-    assertEquals(expected, MessageWriter.sanitizeJavadoc(input));
-  }
-
-  @Test public void sanitizeJavadocGuardsFormatCharacters() {
-    String input = "This is 12% of %s%d%f%c!";
-    String expected = "This is 12%% of %%s%%d%%f%%c!";
-    assertEquals(expected, MessageWriter.sanitizeJavadoc(input));
-  }
-
-  @Test public void sanitizeJavadocWrapsSeeLinks() {
-    String input = "Google query.\n\n@see http://google.com";
-    String expected = "Google query.\n\n@see <a href=\"http://google.com\">http://google.com</a>";
-    assertEquals(expected, MessageWriter.sanitizeJavadoc(input));
+    assertThat(logger.getLog()).isEqualTo(""
+            + testDir.getAbsolutePath() + " com.squareup.wire.protos.roots.TheRequest\n"
+            + testDir.getAbsolutePath() + " com.squareup.wire.protos.roots.TheResponse\n"
+            + testDir.getAbsolutePath() + " com.squareup.wire.protos.roots.TheService\n");
   }
 
   private void cleanup(File dir) {
-    Assert.assertNotNull(dir);
-    Assert.assertTrue(dir.isDirectory());
+    assertThat(dir).isNotNull();
+    assertThat(dir.isDirectory()).isTrue();
     File[] files = dir.listFiles();
     if (files != null) {
       for (File f : files) {
@@ -696,7 +674,7 @@ public class WireCompilerTest {
   }
 
   private void cleanupHelper(File f) {
-    Assert.assertNotNull(f);
+    assertThat(f).isNotNull();
     if (f.isDirectory()) {
       File[] files = f.listFiles();
       if (files != null) {
@@ -731,17 +709,17 @@ public class WireCompilerTest {
   private void invokeCompiler(String[] args) throws WireException {
     CommandLineOptions options = new CommandLineOptions(args);
     logger = new StringWireLogger(options.quiet);
-    new WireCompiler(options, new IO.FileIO(), logger).compile();
+    Loader loader = Loader.forBaseDirectory(options.protoPath());
+    new WireCompiler(options, loader, JavaGenerator.IO.DEFAULT, logger).compile();
   }
 
-  private void assertFilesMatch(File outputDir, String path) throws FileNotFoundException {
+  private void assertFilesMatch(File outputDir, String path) throws IOException {
     File expectedFile = new File("../wire-runtime/src/test/java/" + path);
     File actualFile = new File(outputDir, path);
     assertFilesMatch(expectedFile, actualFile);
   }
 
-  private void assertFilesMatchNoOptions(File outputDir, String path)
-      throws FileNotFoundException {
+  private void assertFilesMatchNoOptions(File outputDir, String path) throws IOException {
     // Compare against file with .noOptions suffix if present
     File expectedFile = new File("../wire-runtime/src/test/java/" + path + ".noOptions");
     if (expectedFile.exists()) {
@@ -754,7 +732,7 @@ public class WireCompilerTest {
   }
 
   private void assertJavaFilesMatchWithSuffix(File outputDir, String path, String suffix)
-      throws FileNotFoundException {
+      throws IOException {
     path = path.substring(0, path.indexOf(".java"));
     // Compare against file with .noOptions suffix if present
     File expectedFile = new File("../wire-runtime/src/test/java/" + path + suffix + ".java");
@@ -763,17 +741,27 @@ public class WireCompilerTest {
     } else {
       expectedFile = new File("../wire-runtime/src/test/java/" + path + ".java");
     }
-    File actualFile = new File(outputDir, path + ".java");
+    File actualFile = new File(outputDir, path + suffix + ".java");
+    if (!actualFile.exists()) {
+      actualFile = new File(outputDir, path + ".java");
+    }
     assertFilesMatch(expectedFile, actualFile);
   }
 
-  private void assertFilesMatch(File expectedFile, File actualFile) throws FileNotFoundException {
-    String expected = new Scanner(expectedFile).useDelimiter("\\A").next();
-    String actual = new Scanner(actualFile).useDelimiter("\\A").next();
+  private void assertFilesMatch(File expectedFile, File actualFile) throws IOException {
+    String expected;
+    try (Source source = Okio.source(expectedFile)) {
+      expected = Okio.buffer(source).readUtf8();
+    }
+
+    String actual;
+    try (Source source = Okio.source(actualFile)) {
+      actual = Okio.buffer(source).readUtf8();
+    }
 
     // Normalize CRLF -> LF
     expected = expected.replace("\r\n", "\n");
     actual = actual.replace("\r\n", "\n");
-    assertEquals(expected, actual);
+    assertThat(actual).isEqualTo(expected);
   }
 }

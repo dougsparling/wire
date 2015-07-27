@@ -4,6 +4,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -100,7 +101,7 @@ public class Redactor<T extends Message> {
   }
 
   /**
-   * Returns a copy of {@code message} with all redacted fields set to null.
+   * Returns a copy of {@code message} with all redacted fields set to null or an empty list.
    * This operation is recursive: nested messages are themselves redacted in the
    * returned object.
    */
@@ -111,11 +112,16 @@ public class Redactor<T extends Message> {
     try {
       Message.Builder<T> builder = (Message.Builder<T>) builderConstructor.newInstance(message);
 
-      for (Field field : redactedFields) {
-        field.set(builder, null);
+      for (int i = 0, count = redactedFields.size(); i < count; i++) {
+        Field redactedField = redactedFields.get(i);
+        Object redactedValue = null;
+        if (redactedField.getType() == List.class) {
+          redactedValue = Collections.emptyList();
+        }
+        redactedField.set(builder, redactedValue);
       }
 
-      for (int i = 0; i < messageFields.size(); i++) {
+      for (int i = 0, count = messageFields.size(); i < count; i++) {
         Field field = messageFields.get(i);
         Redactor<Message> r = (Redactor<Message>) messageRedactors.get(i);
         field.set(builder, r.redact((Message) field.get(builder)));
@@ -123,7 +129,7 @@ public class Redactor<T extends Message> {
 
       return builder.build();
     } catch (Exception e) {
-      throw new AssertionError(e.getMessage());
+      throw new AssertionError(e);
     }
   }
 

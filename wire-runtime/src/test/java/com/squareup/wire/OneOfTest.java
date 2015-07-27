@@ -16,20 +16,12 @@
 package com.squareup.wire;
 
 import com.squareup.wire.protos.oneof.OneOfMessage;
-
+import java.io.IOException;
 import org.junit.Test;
 
-import java.io.IOException;
-
-import static com.squareup.wire.protos.oneof.OneOfMessage.Choice.BAR;
-import static com.squareup.wire.protos.oneof.OneOfMessage.Choice.CHOICE_NOT_SET;
-import static com.squareup.wire.protos.oneof.OneOfMessage.Choice.FOO;
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class OneOfTest {
-
-  private static final Wire wire = new Wire();
 
   private static final byte[] INITIAL_BYTES = {};
   // (Tag #1 << 3 | VARINT) = 8.
@@ -37,52 +29,51 @@ public class OneOfTest {
   // (Tag #3 << 3 | LENGTH_DELIMITED) = 26, string length = 6.
   private static final byte[] BAR_BYTES = { 26, 6, 'b', 'a', 'r', 'b', 'a', 'r'};
 
+  private final Wire wire = new Wire();
+  private final MessageAdapter<OneOfMessage> adapter = wire.adapter(OneOfMessage.class);
 
   @Test
   public void testOneOf() throws Exception {
     OneOfMessage.Builder builder = new OneOfMessage.Builder();
-    validate(builder, null, null, CHOICE_NOT_SET, INITIAL_BYTES);
+    validate(builder, null, null, INITIAL_BYTES);
 
     builder.foo(17);
-    validate(builder, 17, null, FOO, FOO_BYTES);
+    validate(builder, 17, null, FOO_BYTES);
 
     builder.bar("barbar");
-    validate(builder, null, "barbar", BAR, BAR_BYTES);
+    validate(builder, null, "barbar", BAR_BYTES);
 
     builder.bar(null);
-    validate(builder, null, null, CHOICE_NOT_SET, INITIAL_BYTES);
+    validate(builder, null, null, INITIAL_BYTES);
 
     builder.bar("barbar");
-    validate(builder, null, "barbar", BAR, BAR_BYTES);
+    validate(builder, null, "barbar", BAR_BYTES);
 
     builder.foo(17);
-    validate(builder, 17, null, FOO, FOO_BYTES);
+    validate(builder, 17, null, FOO_BYTES);
 
     builder.foo(null);
-    validate(builder, null, null, CHOICE_NOT_SET, INITIAL_BYTES);
+    validate(builder, null, null, INITIAL_BYTES);
   }
 
   private void validate(OneOfMessage.Builder builder, Integer expectedFoo, String expectedBar,
-      OneOfMessage.Choice expectedChoice, byte[] expectedBytes) throws IOException {
+      byte[] expectedBytes) throws IOException {
     // Check builder fields
-    assertEquals(expectedFoo, builder.foo);
-    assertEquals(expectedBar, builder.bar);
-    assertEquals(expectedChoice, builder.choice);
+    assertThat(builder.foo).isEqualTo(expectedFoo);
+    assertThat(builder.bar).isEqualTo(expectedBar);
 
     // Check message fields.
     OneOfMessage message = builder.build();
-    assertEquals(expectedFoo, message.foo);
-    assertEquals(expectedBar, message.bar);
-    assertEquals(expectedChoice, message.choice);
+    assertThat(message.foo).isEqualTo(expectedFoo);
+    assertThat(message.bar).isEqualTo(expectedBar);
 
     // Check serialized bytes.
-    byte[] bytes = message.toByteArray();
-    assertArrayEquals(expectedBytes, bytes);
+    byte[] bytes = adapter.writeBytes(message);
+    assertThat(expectedBytes).isEqualTo(bytes);
 
     // Check result of deserialization.
-    OneOfMessage newMessage = wire.parseFrom(bytes, OneOfMessage.class);
-    assertEquals(expectedFoo, newMessage.foo);
-    assertEquals(expectedBar, newMessage.bar);
-    assertEquals(expectedChoice, newMessage.choice);
+    OneOfMessage newMessage = adapter.readBytes(bytes);
+    assertThat(newMessage.foo).isEqualTo(expectedFoo);
+    assertThat(newMessage.bar).isEqualTo(expectedBar);
   }
 }

@@ -15,52 +15,49 @@
  */
 package com.squareup.wire;
 
-import com.squareup.javawriter.JavaWriter;
-import com.squareup.protoparser.ProtoFile;
-import com.squareup.protoparser.ProtoParser;
+import com.squareup.javapoet.JavaFile;
+import com.squareup.wire.java.JavaGenerator;
+import com.squareup.wire.schema.Loader;
+import com.squareup.wire.schema.Location;
+import com.squareup.wire.schema.SchemaException;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.StringReader;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import okio.Buffer;
+import okio.Source;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.fail;
 
 public class WireCompilerErrorTest {
 
-  static class StringIO implements IO {
+  static class StringIO implements Loader.IO, JavaGenerator.IO {
     private final String protoFileName;
     private final String source;
     private final Map<String, StringWriter> writers = new LinkedHashMap<String, StringWriter>();
 
     public StringIO(String protoFileName, String source) {
-      this.protoFileName = "./" + protoFileName;
+      this.protoFileName = protoFileName;
       this.source = source;
     }
 
-    @Override
-    public ProtoFile parse(String filename) throws IOException {
-      if (filename.equals(protoFileName)) {
-        return ProtoParser.parse(filename, new StringReader(source));
+    @Override public Location locate(String path) throws IOException {
+      if (path.equals(protoFileName)) {
+        return Location.get(path);
       } else {
         throw new FileNotFoundException();
       }
     }
 
-    @Override
-    public JavaWriter getJavaWriter(OutputArtifact outputArtifact)
-        throws IOException {
-      StringWriter writer = new StringWriter();
-      writers.put(outputArtifact.fullClassName(), writer);
-      return new JavaWriter(writer);
+    @Override public Source open(Location location) throws IOException {
+      return new Buffer().writeUtf8(source);
     }
 
     public Map<String, String> getOutput() {
@@ -69,6 +66,13 @@ public class WireCompilerErrorTest {
         output.put(entry.getKey(), entry.getValue().toString());
       }
       return output;
+    }
+
+    @Override public void write(File outputDirectory, JavaFile javaFile)
+        throws IOException {
+      StringWriter writer = new StringWriter();
+      writers.put(javaFile.packageName + "." + javaFile.typeSpec.name, writer);
+      javaFile.writeTo(writer);
     }
   }
 
@@ -79,14 +83,14 @@ public class WireCompilerErrorTest {
   private Map<String, String> compile(String source) {
     StringIO io = new StringIO("test.proto", source);
 
-    CommandLineOptions options = new CommandLineOptions(".",  ".", Arrays.asList("test.proto"),
-        new ArrayList<String>(), null, true, Collections.<String>emptySet(), null,
-        Collections.<String>emptyList(), false, false);
+    CommandLineOptions options = new CommandLineOptions(".",  new File("."),
+        Arrays.asList("test.proto"), new ArrayList<String>(), null, true,
+        Collections.<String>emptySet(), null, Collections.<String>emptyList(), false, false);
 
     try {
-      new WireCompiler(options, io, new StringWireLogger(true)).compile();
+      new WireCompiler(options, new Loader(io), io, new StringWireLogger(true)).compile();
     } catch (WireException e) {
-      fail();
+      throw new AssertionError(e);
     }
     return io.getOutput();
   }
@@ -97,7 +101,7 @@ public class WireCompilerErrorTest {
         + "  optional int32 f = 1;\n"
         + "}\n");
     String generatedSource = output.get("com.squareup.protos.test.Simple");
-    assertTrue(generatedSource.contains("public final class Simple extends Message {"));
+    assertThat(generatedSource).contains("public final class Simple extends Message {");
   }
 
   @Test public void testZeroTag() {
@@ -107,8 +111,10 @@ public class WireCompilerErrorTest {
           + "  optional int32 f = 0;\n"
           + "}\n");
       fail();
-    } catch (IllegalArgumentException e) {
-      assertEquals("Illegal tag value: 0", e.getMessage());
+    } catch (SchemaException e) {
+      assertThat(e).hasMessage("tag is out of range: 0\n"
+          + "  for field f (test.proto at 3:3)\n"
+          + "  in message com.squareup.protos.test.Simple (test.proto at 2:1)");
     }
   }
 
@@ -120,8 +126,11 @@ public class WireCompilerErrorTest {
           + "  optional int32 g = 1;\n"
           + "}\n");
       fail();
-    } catch (IllegalStateException e) {
-      assertEquals("Duplicate tag 1 in com.squareup.protos.test.Simple", e.getMessage());
+    } catch (SchemaException e) {
+      assertThat(e).hasMessage("multiple fields share tag 1:\n"
+          + "  1. f (test.proto at 3:3)\n"
+          + "  2. g (test.proto at 4:3)\n"
+          + "  for message com.squareup.protos.test.Simple (test.proto at 2:1)");
     }
   }
 
@@ -140,15 +149,18 @@ public class WireCompilerErrorTest {
           + "    }\n"
           + "}\n");
       fail();
-    } catch (IllegalStateException e) {
-      assertEquals("Duplicate enum constant QUIX in scope com.squareup.protos.test.Foo", e.getMessage());
+    } catch (SchemaException e) {
+      assertThat(e).hasMessage("multiple enums share constant QUIX:\n"
+          + "  1. com.squareup.protos.test.Foo.Bar.QUIX (test.proto at 4:7)\n"
+          + "  2. com.squareup.protos.test.Foo.Bar2.QUIX (test.proto at 10:7)\n"
+          + "  for message com.squareup.protos.test.Foo (test.proto at 2:3)");
     }
   }
 
   @Test public void testNoPackageNameIsLegal() {
     Map<String, String> output = compile("message Simple { optional int32 f = 1; }");
-    assertTrue(output.containsKey(".Simple"));
+    assertThat(output).containsKey(".Simple");
     // Output should not have a 'package' declaration.
-    assertFalse(output.get(".Simple").contains("package"));
+    assertThat(output.get(".Simple")).doesNotContain("package");
   }
 }

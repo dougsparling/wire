@@ -15,17 +15,11 @@
  */
 package com.squareup.wire;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import okio.Source;
-
-import static com.squareup.wire.Preconditions.checkArgument;
-import static com.squareup.wire.Preconditions.checkNotNull;
 
 /**
  * Encode and decode Wire protocol buffers.
@@ -34,10 +28,6 @@ public final class Wire {
 
   private final Map<Class<? extends Message>, MessageAdapter<? extends Message>> messageAdapters =
       new LinkedHashMap<Class<? extends Message>, MessageAdapter<? extends Message>>();
-  private final Map<Class<? extends Message.Builder>,
-      BuilderAdapter<? extends Message.Builder>> builderAdapters =
-          new LinkedHashMap<Class<? extends Message.Builder>,
-              BuilderAdapter<? extends Message.Builder>>();
   private final Map<Class<? extends ProtoEnum>, EnumAdapter<? extends ProtoEnum>> enumAdapters =
       new LinkedHashMap<Class<? extends ProtoEnum>, EnumAdapter<? extends ProtoEnum>>();
 
@@ -74,6 +64,11 @@ public final class Wire {
     }
   }
 
+  /** Returns an adapter for reading and writing {@code type}, creating it if necessary. */
+  public <M extends Message> MessageAdapter<M> adapter(Class<M> type) {
+    return messageAdapter(type);
+  }
+
   /**
    * Returns a message adapter for {@code messageType}.
    */
@@ -83,20 +78,6 @@ public final class Wire {
     if (adapter == null) {
       adapter = new MessageAdapter<M>(this, messageType);
       messageAdapters.put(messageType, adapter);
-    }
-    return adapter;
-  }
-
-  /**
-   * Returns a builder adapter for {@code builderType}.
-   */
-  @SuppressWarnings("unchecked")
-  synchronized <B extends Message.Builder> BuilderAdapter<B>
-      builderAdapter(Class<B> builderType) {
-    BuilderAdapter<B> adapter = (BuilderAdapter<B>) builderAdapters.get(builderType);
-    if (adapter == null) {
-      adapter = new BuilderAdapter<B>(builderType);
-      builderAdapters.put(builderType, adapter);
     }
     return adapter;
   }
@@ -112,59 +93,6 @@ public final class Wire {
       enumAdapters.put(enumClass, adapter);
     }
     return adapter;
-  }
-
-  /**
-   * Reads a message of type {@code messageClass} from {@code bytes} and returns
-   * it.
-   */
-  public <M extends Message> M parseFrom(byte[] bytes, Class<M> messageClass) throws IOException {
-    checkNotNull(bytes, "bytes");
-    checkNotNull(messageClass, "messageClass");
-    return parseFrom(WireInput.newInstance(bytes), messageClass);
-  }
-
-  /**
-   * Reads a message of type {@code messageClass} from the given range of {@code
-   * bytes} and returns it.
-   */
-  public <M extends Message> M parseFrom(byte[] bytes, int offset, int count, Class<M> messageClass)
-      throws IOException {
-    checkNotNull(bytes, "bytes");
-    checkArgument(offset >= 0, "offset < 0");
-    checkArgument(count >= 0, "count < 0");
-    checkArgument(offset + count <= bytes.length, "offset + count > bytes");
-    checkNotNull(messageClass, "messageClass");
-    return parseFrom(WireInput.newInstance(bytes, offset, count), messageClass);
-  }
-
-  /**
-   * Reads a message of type {@code messageClass} from the given {@link InputStream} and returns it.
-   */
-  public <M extends Message> M parseFrom(InputStream input, Class<M> messageClass)
-      throws IOException {
-    checkNotNull(input, "input");
-    checkNotNull(messageClass, "messageClass");
-    return parseFrom(WireInput.newInstance(input), messageClass);
-  }
-
-  /**
-   * Reads a message of type {@code messageClass} from the given {@link Source} and returns it.
-   */
-  public <M extends Message> M parseFrom(Source input, Class<M> messageClass)
-      throws IOException {
-    checkNotNull(input, "input");
-    checkNotNull(messageClass, "messageClass");
-    return parseFrom(WireInput.newInstance(input), messageClass);
-  }
-
-  /**
-   * Reads a message of type {@code messageClass} from {@code input} and returns it.
-   */
-  private <M extends Message> M parseFrom(WireInput input, Class<M> messageClass)
-      throws IOException {
-    MessageAdapter<M> adapter = messageAdapter(messageClass);
-    return adapter.read(input);
   }
 
   /**

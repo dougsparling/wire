@@ -23,7 +23,7 @@ import java.io.IOException;
 import okio.ByteString;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.fail;
 
 public final class ParseTest {
@@ -33,8 +33,8 @@ public final class ParseTest {
     // tag 1 / type 0: 456
     // tag 2 / type 0: 789
     ByteString data = ByteString.decodeHex("08c803109506");
-    OneField oneField = wire.parseFrom(data.toByteArray(), OneField.class);
-    assertEquals(new OneField.Builder().opt_int32(456).build(), oneField);
+    OneField oneField = wire.adapter(OneField.class).readBytes(data.toByteArray());
+    assertThat(oneField).isEqualTo(new OneField.Builder().opt_int32(456).build());
   }
 
   @Test public void unknownTypeThrowsIOException() throws Exception {
@@ -42,10 +42,10 @@ public final class ParseTest {
     // tag 2 / type 7: 789
     ByteString data = ByteString.decodeHex("08c803179506");
     try {
-      wire.parseFrom(data.toByteArray(), OneField.class);
+      wire.adapter(OneField.class).readBytes(data.toByteArray());
       fail();
     } catch (IOException expected) {
-      assertEquals("No WireType for type 7", expected.getMessage());
+      assertThat(expected).hasMessage("No WireType for type 7");
     }
   }
 
@@ -53,15 +53,15 @@ public final class ParseTest {
     // tag 1 / 3-byte length-delimited string: 0x109506
     // (0x109506 is a well-formed proto message that sets tag 2 to 456).
     ByteString data = ByteString.decodeHex("0a03109506");
-    OneField oneField = wire.parseFrom(data.toByteArray(), OneField.class);
-    assertEquals(oneField, new OneField.Builder().opt_int32(3).build());
+    OneField oneField = wire.adapter(OneField.class).readBytes(data.toByteArray());
+    assertThat(new OneField.Builder().opt_int32(3).build()).isEqualTo(oneField);
   }
 
   @Test public void truncatedMessageThrowsEOFException() throws Exception {
     // tag 1 / 4-byte length delimited string: 0x000000 (3 bytes)
     ByteString data = ByteString.decodeHex("0a04000000");
     try {
-      wire.parseFrom(data.toByteArray(), OneBytesField.class);
+      wire.adapter(OneBytesField.class).readBytes(data.toByteArray());
       fail();
     } catch (EOFException expected) {
     }
@@ -72,11 +72,11 @@ public final class ParseTest {
     // tag 2 / type 0: 456
     ByteString data = ByteString.decodeHex("120300000010c803");
     try {
-      wire.parseFrom(data.toByteArray(), OneField.class);
+      wire.adapter(OneField.class).readBytes(data.toByteArray());
       fail();
     } catch (IOException expected) {
-      assertEquals("Wire type VARINT differs from previous type LENGTH_DELIMITED for tag 2",
-          expected.getMessage());
+      assertThat(expected).hasMessage(
+          "Wire type VarintValue differs from previous type LengthDelimitedValue for tag 2");
     }
   }
 
@@ -84,8 +84,8 @@ public final class ParseTest {
     // tag 1 / type 0: 456
     // tag 1 / type 0: 789
     ByteString data = ByteString.decodeHex("08c803089506");
-    OneField oneField = wire.parseFrom(data.toByteArray(), OneField.class);
-    assertEquals(oneField, new OneField.Builder().opt_int32(789).build());
+    OneField oneField = wire.adapter(OneField.class).readBytes(data.toByteArray());
+    assertThat(new OneField.Builder().opt_int32(789).build()).isEqualTo(oneField);
   }
 
   @Test public void upToRecursionLimit() throws Exception {
@@ -95,8 +95,9 @@ public final class ParseTest {
         + "412621260125e125c125a12581256125412521250124e124c124a12481246124412421240123e123c123a123"
         + "81236123412321230122e122c122a12281226122412221220121e121c121a12181216121412121210120e120"
         + "c120a1208120612041202120008c803");
-    Recursive recursive = wire.parseFrom(data.toByteArray(), Recursive.class);
-    assertEquals(456, recursive.value.intValue());
+    Recursive recursive =
+        wire.adapter(Recursive.class).readBytes(data.toByteArray());
+    assertThat(recursive.value.intValue()).isEqualTo(456);
   }
 
   @Test public void overRecursionLimitThrowsIOException() throws Exception {
@@ -107,10 +108,10 @@ public final class ParseTest {
         + "23a12381236123412321230122e122c122a12281226122412221220121e121c121a121812161214121212101"
         + "20e120c120a1208120612041202120008c803");
     try {
-      wire.parseFrom(data.toByteArray(), Recursive.class);
+      wire.adapter(Recursive.class).readBytes(data.toByteArray());
       fail();
     } catch (IOException expected) {
-      assertEquals("Wire recursion limit exceeded", expected.getMessage());
+      assertThat(expected).hasMessage("Wire recursion limit exceeded");
     }
   }
 }
