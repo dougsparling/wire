@@ -231,7 +231,10 @@ public final class MessageAdapter<M extends Message> {
   /**
    * Returns the serialized size of a given message, in bytes.
    */
-  int getSerializedSize(M message) {
+  public int getSerializedSize(M message) {
+    if (message.cachedSerializedSize != -1) {
+      return message.cachedSerializedSize;
+    }
     int size = 0;
     for (FieldInfo fieldInfo : getFields()) {
       Object value = getFieldValue(message, fieldInfo);
@@ -260,6 +263,7 @@ public final class MessageAdapter<M extends Message> {
       }
     }
     size += message.getUnknownFieldsSerializedSize();
+    message.cachedSerializedSize = size;
     return size;
   }
 
